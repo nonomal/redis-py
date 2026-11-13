@@ -1,9 +1,18 @@
-from .aggregation import Reducer, SortDirection
+from typing import Iterable, Union
+
+from .aggregation import Asc, Desc, Reducer, SortDirection
+
+
+def _ensure_at_prefix(name: str) -> str:
+    """Return ``name`` with a single leading ``@`` prefix."""
+    return name if name.startswith("@") else "@" + name
 
 
 class FieldOnlyReducer(Reducer):
-    def __init__(self, field):
-        super(FieldOnlyReducer, self).__init__(field)
+    """See https://redis.io/docs/interact/search-and-query/search/aggregations/"""
+
+    def __init__(self, field: str) -> None:
+        super().__init__(field)
         self._field = field
 
 
@@ -14,8 +23,8 @@ class count(Reducer):
 
     NAME = "COUNT"
 
-    def __init__(self):
-        super(count, self).__init__()
+    def __init__(self) -> None:
+        super().__init__()
 
 
 class sum(FieldOnlyReducer):
@@ -25,8 +34,8 @@ class sum(FieldOnlyReducer):
 
     NAME = "SUM"
 
-    def __init__(self, field):
-        super(sum, self).__init__(field)
+    def __init__(self, field: str) -> None:
+        super().__init__(field)
 
 
 class min(FieldOnlyReducer):
@@ -36,8 +45,8 @@ class min(FieldOnlyReducer):
 
     NAME = "MIN"
 
-    def __init__(self, field):
-        super(min, self).__init__(field)
+    def __init__(self, field: str) -> None:
+        super().__init__(field)
 
 
 class max(FieldOnlyReducer):
@@ -47,8 +56,8 @@ class max(FieldOnlyReducer):
 
     NAME = "MAX"
 
-    def __init__(self, field):
-        super(max, self).__init__(field)
+    def __init__(self, field: str) -> None:
+        super().__init__(field)
 
 
 class avg(FieldOnlyReducer):
@@ -58,8 +67,8 @@ class avg(FieldOnlyReducer):
 
     NAME = "AVG"
 
-    def __init__(self, field):
-        super(avg, self).__init__(field)
+    def __init__(self, field: str) -> None:
+        super().__init__(field)
 
 
 class tolist(FieldOnlyReducer):
@@ -69,8 +78,8 @@ class tolist(FieldOnlyReducer):
 
     NAME = "TOLIST"
 
-    def __init__(self, field):
-        super(tolist, self).__init__(field)
+    def __init__(self, field: str) -> None:
+        super().__init__(field)
 
 
 class count_distinct(FieldOnlyReducer):
@@ -81,8 +90,8 @@ class count_distinct(FieldOnlyReducer):
 
     NAME = "COUNT_DISTINCT"
 
-    def __init__(self, field):
-        super(count_distinct, self).__init__(field)
+    def __init__(self, field: str) -> None:
+        super().__init__(field)
 
 
 class count_distinctish(FieldOnlyReducer):
@@ -103,8 +112,8 @@ class quantile(Reducer):
 
     NAME = "QUANTILE"
 
-    def __init__(self, field, pct):
-        super(quantile, self).__init__(field, str(pct))
+    def __init__(self, field: str, pct: float) -> None:
+        super().__init__(field, str(pct))
         self._field = field
 
 
@@ -115,8 +124,8 @@ class stddev(FieldOnlyReducer):
 
     NAME = "STDDEV"
 
-    def __init__(self, field):
-        super(stddev, self).__init__(field)
+    def __init__(self, field: str) -> None:
+        super().__init__(field)
 
 
 class first_value(Reducer):
@@ -126,7 +135,7 @@ class first_value(Reducer):
 
     NAME = "FIRST_VALUE"
 
-    def __init__(self, field, *byfields):
+    def __init__(self, field: str, *byfields: Union[Asc, Desc]) -> None:
         """
         Selects the first value of the given field within the group.
 
@@ -155,7 +164,7 @@ class first_value(Reducer):
         args = [field]
         if fieldstrs:
             args += ["BY"] + fieldstrs
-        super(first_value, self).__init__(*args)
+        super().__init__(*args)
         self._field = field
 
 
@@ -166,7 +175,7 @@ class random_sample(Reducer):
 
     NAME = "RANDOM_SAMPLE"
 
-    def __init__(self, field, size):
+    def __init__(self, field: str, size: int) -> None:
         """
         ### Parameter
 
@@ -174,5 +183,79 @@ class random_sample(Reducer):
         **size**: Return this many items (can be less)
         """
         args = [field, str(size)]
-        super(random_sample, self).__init__(*args)
+        super().__init__(*args)
         self._field = field
+
+
+class collect(Reducer):
+    """
+    Gathers the rows of each ``GROUPBY`` group, projects a chosen set of
+    fields from every row, optionally deduplicates, sorts, and limits them,
+    and returns them as an array of per-entry maps under the reducer alias.
+
+    ``COLLECT`` is a preview feature gated behind
+    ``search-enable-unstable-features``. See
+    `FT.AGGREGATE <https://redis.io/commands/ft.aggregate>`_.
+    """
+
+    NAME = "COLLECT"
+
+    def __init__(
+        self,
+        fields: str | Iterable[str] = "*",
+        distinct: bool = False,
+        sort_by: Asc | Desc | Iterable[Asc | Desc] | None = None,
+        limit: tuple[int, int] | None = None,
+    ) -> None:
+        """
+        ### Parameters
+
+        - **fields**: The fields to project from each collected row. Either the
+            literal ``"*"`` (project every field present in the pipeline at this
+            stage) or a field name / iterable of field names. Names are
+            normalized to a single leading ``@`` on the wire; output map keys
+            are the bare names.
+        - **distinct**: When ``True``, emit ``DISTINCT`` to deduplicate entries
+            with identical projected fields. Forward-compatible: this option is
+            not yet implemented by the server and currently produces a server
+            error when sent.
+        - **sort_by**: An ``Asc``/``Desc`` instance or an iterable of them, used
+            to order the collected entries within each group.
+        - **limit**: An ``(offset, count)`` pair. Returns at most ``count``
+            entries per group after skipping ``offset``. With ``sort_by`` this
+            acts as a top-N selection.
+        """
+        args: list[str] = []
+
+        # FIELDS (required)
+        if fields == "*":
+            args += ["FIELDS", "*"]
+        else:
+            names = [fields] if isinstance(fields, str) else list(fields)
+            if not names or any(not n.strip() for n in names):
+                raise ValueError(
+                    "collect fields must be '*' or a non-empty list of names"
+                )
+            names = [_ensure_at_prefix(n) for n in names]
+            args += ["FIELDS", str(len(names))] + names
+
+        # DISTINCT (optional)
+        if distinct:
+            args += ["DISTINCT"]
+
+        # SORTBY (optional)
+        if sort_by is not None:
+            sort_fields = [sort_by] if isinstance(sort_by, (Asc, Desc)) else sort_by
+            sort_args: list[str] = []
+            for f in sort_fields:
+                sort_args += [_ensure_at_prefix(f.field), f.DIRSTRING]
+            if not sort_args:
+                raise ValueError("collect sort_by must contain at least one field")
+            args += ["SORTBY", str(len(sort_args))] + sort_args
+
+        # LIMIT (optional)
+        if limit is not None:
+            offset, count = limit
+            args += ["LIMIT", str(offset), str(count)]
+
+        super().__init__(*args)

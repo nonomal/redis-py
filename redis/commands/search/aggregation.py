@@ -1,21 +1,20 @@
-from six import string_types
+from typing import List, Optional, Tuple, Union
+
+from redis.commands.search.dialect import DEFAULT_DIALECT
 
 FIELDNAME = object()
 
 
-class Limit(object):
-    def __init__(self, offset=0, count=0):
+class Limit:
+    def __init__(self, offset: int = 0, count: int = 0) -> None:
         self.offset = offset
         self.count = count
 
     def build_args(self):
-        if self.count:
-            return ["LIMIT", str(self.offset), str(self.count)]
-        else:
-            return []
+        return ["LIMIT", str(self.offset), str(self.count)]
 
 
-class Reducer(object):
+class Reducer:
     """
     Base reducer object for all reducers.
 
@@ -24,12 +23,12 @@ class Reducer(object):
 
     NAME = None
 
-    def __init__(self, *args):
-        self._args = args
-        self._field = None
-        self._alias = None
+    def __init__(self, *args: str) -> None:
+        self._args: Tuple[str, ...] = args
+        self._field: Optional[str] = None
+        self._alias: Optional[str] = None
 
-    def alias(self, alias):
+    def alias(self, alias: str) -> "Reducer":
         """
         Set the alias for this reducer.
 
@@ -47,24 +46,25 @@ class Reducer(object):
         if alias is FIELDNAME:
             if not self._field:
                 raise ValueError("Cannot use FIELDNAME alias with no field")
-            # Chop off initial '@'
-            alias = self._field[1:]
+            else:
+                # Chop off initial '@', which is optional in field names
+                alias = self._field.removeprefix("@")
         self._alias = alias
         return self
 
     @property
-    def args(self):
+    def args(self) -> Tuple[str, ...]:
         return self._args
 
 
-class SortDirection(object):
+class SortDirection:
     """
     This special class is used to indicate sort direction.
     """
 
-    DIRSTRING = None
+    DIRSTRING: Optional[str] = None
 
-    def __init__(self, field):
+    def __init__(self, field: str) -> None:
         self.field = field
 
 
@@ -84,81 +84,12 @@ class Desc(SortDirection):
     DIRSTRING = "DESC"
 
 
-class Group(object):
-    """
-    This object automatically created in the `AggregateRequest.group_by()`
-    """
-
-    def __init__(self, fields, reducers):
-        if not reducers:
-            raise ValueError("Need at least one reducer")
-
-        fields = [fields] if isinstance(fields, string_types) else fields
-        reducers = [reducers] if isinstance(reducers, Reducer) else reducers
-
-        self.fields = fields
-        self.reducers = reducers
-        self.limit = Limit()
-
-    def build_args(self):
-        ret = ["GROUPBY", str(len(self.fields))]
-        ret.extend(self.fields)
-        for reducer in self.reducers:
-            ret += ["REDUCE", reducer.NAME, str(len(reducer.args))]
-            ret.extend(reducer.args)
-            if reducer._alias is not None:
-                ret += ["AS", reducer._alias]
-        return ret
-
-
-class Projection(object):
-    """
-    This object automatically created in the `AggregateRequest.apply()`
-    """
-
-    def __init__(self, projector, alias=None):
-        self.alias = alias
-        self.projector = projector
-
-    def build_args(self):
-        ret = ["APPLY", self.projector]
-        if self.alias is not None:
-            ret += ["AS", self.alias]
-
-        return ret
-
-
-class SortBy(object):
-    """
-    This object automatically created in the `AggregateRequest.sort_by()`
-    """
-
-    def __init__(self, fields, max=0):
-        self.fields = fields
-        self.max = max
-
-    def build_args(self):
-        fields_args = []
-        for f in self.fields:
-            if isinstance(f, SortDirection):
-                fields_args += [f.field, f.DIRSTRING]
-            else:
-                fields_args += [f]
-
-        ret = ["SORTBY", str(len(fields_args))]
-        ret.extend(fields_args)
-        if self.max > 0:
-            ret += ["MAX", str(self.max)]
-
-        return ret
-
-
-class AggregateRequest(object):
+class AggregateRequest:
     """
     Aggregation request which can be passed to `Client.aggregate`.
     """
 
-    def __init__(self, query="*"):
+    def __init__(self, query: str = "*") -> None:
         """
         Create an aggregation request. This request may then be passed to
         `client.aggregate()`.
@@ -171,28 +102,37 @@ class AggregateRequest(object):
         All member methods (except `build_args()`)
         return the object itself, making them useful for chaining.
         """
-        self._query = query
-        self._aggregateplan = []
-        self._loadfields = []
-        self._limit = Limit()
-        self._max = 0
-        self._with_schema = False
-        self._verbatim = False
-        self._cursor = []
+        self._query: str = query
+        self._aggregateplan: List[str] = []
+        self._loadfields: List[str] = []
+        self._loadall: bool = False
+        self._max: int = 0
+        self._with_schema: bool = False
+        self._verbatim: bool = False
+        self._cursor: List[str] = []
+        self._dialect: int = DEFAULT_DIALECT
+        self._add_scores: bool = False
+        self._scorer: str = "TFIDF"
 
-    def load(self, *fields):
+    def load(self, *fields: str) -> "AggregateRequest":
         """
         Indicate the fields to be returned in the response. These fields are
         returned in addition to any others implicitly specified.
 
         ### Parameters
 
-        - **fields**: One or more fields in the format of `@field`
+        - **fields**: If fields not specified, all the fields will be loaded.
+        Otherwise, fields should be given in the format of `@field`.
         """
-        self._loadfields.extend(fields)
+        if fields:
+            self._loadfields.extend(fields)
+        else:
+            self._loadall = True
         return self
 
-    def group_by(self, fields, *reducers):
+    def group_by(
+        self, fields: Union[str, List[str]], *reducers: Reducer
+    ) -> "AggregateRequest":
         """
         Specify by which fields to group the aggregation.
 
@@ -204,12 +144,19 @@ class AggregateRequest(object):
         - **reducers**: One or more reducers. Reducers may be found in the
             `aggregation` module.
         """
-        group = Group(fields, reducers)
-        self._aggregateplan.extend(group.build_args())
+        fields = [fields] if isinstance(fields, str) else fields
 
+        ret = ["GROUPBY", str(len(fields)), *fields]
+        for reducer in reducers:
+            ret += ["REDUCE", reducer.NAME, str(len(reducer.args))]
+            ret.extend(reducer.args)
+            if reducer._alias is not None:
+                ret += ["AS", reducer._alias]
+
+        self._aggregateplan.extend(ret)
         return self
 
-    def apply(self, **kwexpr):
+    def apply(self, **kwexpr) -> "AggregateRequest":
         """
         Specify one or more projection expressions to add to each result
 
@@ -220,12 +167,14 @@ class AggregateRequest(object):
             expression itself, for example `apply(square_root="sqrt(@foo)")`
         """
         for alias, expr in kwexpr.items():
-            projection = Projection(expr, alias)
-            self._aggregateplan.extend(projection.build_args())
+            ret = ["APPLY", expr]
+            if alias is not None:
+                ret += ["AS", alias]
+            self._aggregateplan.extend(ret)
 
         return self
 
-    def limit(self, offset, num):
+    def limit(self, offset: int, num: int) -> "AggregateRequest":
         """
         Sets the limit for the most recent group or query.
 
@@ -239,7 +188,18 @@ class AggregateRequest(object):
         ### Parameters
 
         - **offset**: Result offset from which to begin paging
-        - **num**: Number of results to return
+        - **num**: Number of results to return. If `num` is 0, `offset` must
+            also be 0; `LIMIT 0 0` omits result rows.
+
+        `LIMIT 0 0` is not a reliable way to count matches through an
+        `AggregateRequest`. To count search matches, use
+        `Query(...).paging(0, 0)` with `FT.SEARCH`. To count inside an
+        aggregation, use `group_by([], reducers.count())`.
+
+        When redis-py returns an `AggregateResult`, its `total` is populated
+        from RESP3 replies but remains 0 for RESP2 replies because the RESP2
+        parser does not populate it. Do not rely on `AggregateResult.total`
+        for counting.
 
 
         Example of sorting the initial results:
@@ -267,11 +227,11 @@ class AggregateRequest(object):
         `sort_by()` instead.
 
         """
-        limit = Limit(offset, num)
-        self._limit = limit
+        _limit = Limit(offset, num)
+        self._aggregateplan.extend(_limit.build_args())
         return self
 
-    def sort_by(self, *fields, **kwargs):
+    def sort_by(self, *fields: str, **kwargs) -> "AggregateRequest":
         """
         Indicate how the results should be sorted. This can also be used for
         *top-N* style queries
@@ -299,16 +259,24 @@ class AggregateRequest(object):
             .sort_by(Desc("@paid"), max=10)
         ```
         """
-        if isinstance(fields, (string_types, SortDirection)):
-            fields = [fields]
 
+        fields_args = []
+        for f in fields:
+            if isinstance(f, (Asc, Desc)):
+                fields_args += [f.field, f.DIRSTRING]
+            else:
+                fields_args += [f]
+
+        ret = ["SORTBY", str(len(fields_args))]
+        ret.extend(fields_args)
         max = kwargs.get("max", 0)
-        sortby = SortBy(fields, max)
+        if max > 0:
+            ret += ["MAX", str(max)]
 
-        self._aggregateplan.extend(sortby.build_args())
+        self._aggregateplan.extend(ret)
         return self
 
-    def filter(self, expressions):
+    def filter(self, expressions: Union[str, List[str]]) -> "AggregateRequest":
         """
         Specify filter for post-query results using predicates relating to
         values in the result set.
@@ -318,7 +286,7 @@ class AggregateRequest(object):
         - **fields**: Fields to group by. This can either be a single string,
             or a list of strings.
         """
-        if isinstance(expressions, string_types):
+        if isinstance(expressions, str):
             expressions = [expressions]
 
         for expression in expressions:
@@ -326,7 +294,7 @@ class AggregateRequest(object):
 
         return self
 
-    def with_schema(self):
+    def with_schema(self) -> "AggregateRequest":
         """
         If set, the `schema` property will contain a list of `[field, type]`
         entries in the result object.
@@ -334,11 +302,29 @@ class AggregateRequest(object):
         self._with_schema = True
         return self
 
-    def verbatim(self):
+    def add_scores(self) -> "AggregateRequest":
+        """
+        If set, includes the score as an ordinary field of the row.
+        """
+        self._add_scores = True
+        return self
+
+    def scorer(self, scorer: str) -> "AggregateRequest":
+        """
+        Use a different scoring function to evaluate document relevance.
+        Default is `TFIDF`.
+
+        :param scorer: The scoring function to use
+                       (e.g. `TFIDF.DOCNORM` or `BM25`)
+        """
+        self._scorer = scorer
+        return self
+
+    def verbatim(self) -> "AggregateRequest":
         self._verbatim = True
         return self
 
-    def cursor(self, count=0, max_idle=0.0):
+    def cursor(self, count: int = 0, max_idle: float = 0.0) -> "AggregateRequest":
         args = ["WITHCURSOR"]
         if count:
             args += ["COUNT", str(count)]
@@ -347,13 +333,7 @@ class AggregateRequest(object):
         self._cursor = args
         return self
 
-    def _limit_2_args(self, limit):
-        if limit[1]:
-            return ["LIMIT"] + [str(x) for x in limit]
-        else:
-            return []
-
-    def build_args(self):
+    def build_args(self) -> List[str]:
         # @foo:bar ...
         ret = [self._query]
 
@@ -363,23 +343,43 @@ class AggregateRequest(object):
         if self._verbatim:
             ret.append("VERBATIM")
 
+        if self._scorer:
+            ret.extend(["SCORER", self._scorer])
+
+        if self._add_scores:
+            ret.append("ADDSCORES")
+
         if self._cursor:
             ret += self._cursor
 
-        if self._loadfields:
+        if self._loadall:
+            ret.append("LOAD")
+            ret.append("*")
+
+        elif self._loadfields:
             ret.append("LOAD")
             ret.append(str(len(self._loadfields)))
             ret.extend(self._loadfields)
 
-        ret.extend(self._aggregateplan)
+        if self._dialect:
+            ret.extend(["DIALECT", str(self._dialect)])
 
-        ret += self._limit.build_args()
+        ret.extend(self._aggregateplan)
 
         return ret
 
+    def dialect(self, dialect: int) -> "AggregateRequest":
+        """
+        Add a dialect field to the aggregate command.
 
-class Cursor(object):
-    def __init__(self, cid):
+        - **dialect** - dialect version to execute the query under
+        """
+        self._dialect = dialect
+        return self
+
+
+class Cursor:
+    def __init__(self, cid: int) -> None:
         self.cid = cid
         self.max_idle = 0
         self.count = 0
@@ -393,16 +393,17 @@ class Cursor(object):
         return args
 
 
-class AggregateResult(object):
-    def __init__(self, rows, cursor, schema):
+class AggregateResult:
+    def __init__(self, rows, cursor: Cursor, schema, total=0, warnings=None) -> None:
         self.rows = rows
         self.cursor = cursor
         self.schema = schema
+        self.total = total
+        self.warnings = warnings or []
 
-    def __repr__(self):
-        return "<{} at 0x{:x} Rows={}, Cursor={}>".format(
-            self.__class__.__name__,
-            id(self),
-            len(self.rows),
-            self.cursor.cid if self.cursor else -1,
+    def __repr__(self) -> str:
+        cid = self.cursor.cid if self.cursor else -1
+        return (
+            f"<{self.__class__.__name__} at 0x{id(self):x} "
+            f"Rows={len(self.rows)}, Cursor={cid}>"
         )

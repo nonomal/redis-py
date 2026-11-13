@@ -1,30 +1,33 @@
-from six.moves import xrange
+from typing import Optional
+
 from ._util import to_string
 
 
-class Suggestion(object):
+class Suggestion:
     """
     Represents a single suggestion being sent or returned from the
     autocomplete server
     """
 
-    def __init__(self, string, score=1.0, payload=None):
+    def __init__(
+        self, string: str, score: float = 1.0, payload: Optional[str] = None
+    ) -> None:
         self.string = to_string(string)
         self.payload = to_string(payload)
         self.score = score
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.string
 
 
-class SuggestionParser(object):
+class SuggestionParser:
     """
     Internal class used to parse results from the `SUGGET` command.
     This needs to consume either 1, 2, or 3 values at a time from
     the return value depending on what objects were requested
     """
 
-    def __init__(self, with_scores, with_payloads, ret):
+    def __init__(self, with_scores: bool, with_payloads: bool, ret) -> None:
         self.with_scores = with_scores
         self.with_payloads = with_payloads
 
@@ -45,10 +48,8 @@ class SuggestionParser(object):
         self._sugs = ret
 
     def __iter__(self):
-        for i in xrange(0, len(self._sugs), self.sugsize):
+        for i in range(0, len(self._sugs), self.sugsize):
             ss = self._sugs[i]
-            score = float(self._sugs[i + self._scoreidx]) \
-                if self.with_scores else 1.0
-            payload = self._sugs[i + self._payloadidx] \
-                if self.with_payloads else None
+            score = float(self._sugs[i + self._scoreidx]) if self.with_scores else 1.0
+            payload = self._sugs[i + self._payloadidx] if self.with_payloads else None
             yield Suggestion(ss, score, payload)

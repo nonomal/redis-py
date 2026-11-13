@@ -1,6 +1,3 @@
-from six import string_types, integer_types
-
-
 def tags(*t):
     """
     Indicate that the values should be matched to a tag field
@@ -18,8 +15,7 @@ def between(a, b, inclusive_min=True, inclusive_max=True):
     """
     Indicate that value is a numeric range
     """
-    return RangeValue(a, b, inclusive_min=inclusive_min,
-                      inclusive_max=inclusive_max)
+    return RangeValue(a, b, inclusive_min=inclusive_min, inclusive_max=inclusive_max)
 
 
 def equal(n):
@@ -61,10 +57,10 @@ def geo(lat, lon, radius, unit="km"):
     """
     Indicate that value is a geo region
     """
-    return GeoValue(lat, lon, radius, unit)
+    return GeoValue(lon, lat, radius, unit)
 
 
-class Value(object):
+class Value:
     @property
     def combinable(self):
         """
@@ -136,8 +132,11 @@ class GeoValue(Value):
         self.radius = radius
         self.unit = unit
 
+    def to_string(self):
+        return f"[{self.lon} {self.lat} {self.radius} {self.unit}]"
 
-class Node(object):
+
+class Node:
     def __init__(self, *children, **kwparams):
         """
         Create a node
@@ -186,7 +185,7 @@ class Node(object):
         kvparams = {}
         for k, v in kwparams.items():
             curvals = kvparams.setdefault(k, [])
-            if isinstance(v, (string_types, integer_types, float)):
+            if isinstance(v, (str, int, float)):
                 curvals.append(Value.make_value(v))
             elif isinstance(v, Value):
                 curvals.append(v)
@@ -200,14 +199,10 @@ class Node(object):
 
     def join_fields(self, key, vals):
         if len(vals) == 1:
-            return [BaseNode("@{}:{}".format(key, vals[0].to_string()))]
+            return [BaseNode(f"@{key}:{vals[0].to_string()}")]
         if not vals[0].combinable:
-            return [BaseNode("@{}:{}".format(key,
-                                             v.to_string())) for v in vals]
-        s = BaseNode(
-            "@{}:({})".format(key,
-                              self.JOINSTR.join(v.to_string() for v in vals))
-        )
+            return [BaseNode(f"@{key}:{v.to_string()}") for v in vals]
+        s = BaseNode(f"@{key}:({self.JOINSTR.join(v.to_string() for v in vals)})")
         return [s]
 
     @classmethod
@@ -223,9 +218,7 @@ class Node(object):
     def to_string(self, with_parens=None):
         with_parens = self._should_use_paren(with_parens)
         pre, post = ("(", ")") if with_parens else ("", "")
-        return "{}{}{}".format(
-            pre, self.JOINSTR.join(n.to_string() for n in self.params), post
-        )
+        return f"{pre}{self.JOINSTR.join(n.to_string() for n in self.params)}{post}"
 
     def _should_use_paren(self, optval):
         if optval is not None:
@@ -238,7 +231,7 @@ class Node(object):
 
 class BaseNode(Node):
     def __init__(self, s):
-        super(BaseNode, self).__init__()
+        super().__init__()
         self.s = str(s)
 
     def to_string(self, with_parens=None):
@@ -265,17 +258,14 @@ class UnionNode(Node):
 
 class DisjunctNode(IntersectNode):
     """
-    Create a disjunct node. In order for this node to be true, all of its
-    children must evaluate to false
+    Create a disjunct node. This node is true when the intersection of its
+    children is false. To require that every child is false, use
+    `disjunct_union`.
     """
 
     def to_string(self, with_parens=None):
-        with_parens = self._should_use_paren(with_parens)
-        ret = super(DisjunctNode, self).to_string(with_parens=False)
-        if with_parens:
-            return "(-" + ret + ")"
-        else:
-            return "-" + ret
+        # The prefix applies to the whole group, not just the first child.
+        return "-" + super().to_string(with_parens=with_parens)
 
 
 class DistjunctUnion(DisjunctNode):
@@ -296,12 +286,8 @@ class OptionalNode(IntersectNode):
     """
 
     def to_string(self, with_parens=None):
-        with_parens = self._should_use_paren(with_parens)
-        ret = super(OptionalNode, self).to_string(with_parens=False)
-        if with_parens:
-            return "(~" + ret + ")"
-        else:
-            return "~" + ret
+        # The prefix applies to the whole group, not just the first child.
+        return "~" + super().to_string(with_parens=with_parens)
 
 
 def intersect(*args, **kwargs):
